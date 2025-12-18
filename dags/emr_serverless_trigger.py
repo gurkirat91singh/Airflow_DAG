@@ -1,28 +1,87 @@
-from datetime import datetime
-from airflow import DAG
+from __future__ import annotations
 
+import time
+from datetime import datetime
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.utils.trigger_rule import TriggerRule
+
+AWS_REGION = "us-east-1"
 EMR_APP_ID = "00g1epr3lmt18s09"
 EMR_EXEC_ROLE_ARN = "arn:aws:iam::451393504235:role/emr-serverless-execution-role-poc"
-
-# Spark entrypoint script in S3
 ENTRYPOINT_S3 = "s3://gsingh-pyspark-poc/emr/jobs/hello_spark.py"
 
-def kpo(task_id: str, script: str):
-    # lazy import to avoid DAG import timeouts
-    from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 
-    return KubernetesPodOperator(
-        task_id=task_id,
-        name=task_id.replace("_", "-"),
-        namespace="airflow",
-        in_cluster=True,
-        service_account_name="airflow-worker",
-        image="public.ecr.aws/aws-cli/aws-cli:2.15.30",
-        cmds=["sh", "-lc"],
-        arguments=[script],
-        get_logs=True,
-        is_delete_operator_pod=True,
+def _client():
+    import boto3
+    return boto3.client("emr-serverless", region_name=AWS_REGION)
+
+
+def start_app():
+    c = _client()
+    try:
+        c.start_application(applicationId=EMR_APP_ID)
+    except c.exceptions.ConflictException:
+        # already starting/started
+        pass
+
+    # wait until STARTED
+    for _ in range(60):
+        state = c.get_application(applicationId=EMR_APP_ID)["application"]["state"]
+        print(f"state={state}")
+        if state == "STARTED":
+            return
+        time.sleep(10)
+
+    raise RuntimeError("Timed out waiting for EMR app to reach STARTED")
+
+
+def start_job(ti):
+    c = _client()
+    resp = c.start_job_run(
+        applicationId=EMR_APP_ID,
+        executionRoleArn=EMR_EXEC_ROLE_ARN,
+        jobDriver={"sparkSubmit": {"entryPoint": ENTRYPOINT_S3}},
+        # no monitoringConfiguration (S3 logs removed as requested)
     )
+    job_run_id = resp["jobRunId"]
+    print(f"JOB_RUN_ID={job_run_id}")
+    ti.xcom_push(key="job_run_id", value=job_run_id)
+
+
+def wait_job(ti):
+    c = _client()
+    job_run_id = ti.xcom_pull(task_ids="start_job", key="job_run_id")
+    if not job_run_id:
+        raise ValueError("Missing job_run_id from XCom")
+
+    while True:
+        jr = c.get_job_run(applicationId=EMR_APP_ID, jobRunId=job_run_id)["jobRun"]
+        state = jr["state"]
+        print(f"STATE={state}")
+
+        if state == "SUCCESS":
+            print(f"✅ SUCCESS: {job_run_id}")
+            return
+
+        if state in ("FAILED", "CANCELLED"):
+            print(f"❌ {state}: {job_run_id}")
+            print(jr)
+            raise RuntimeError(f"EMR Serverless job ended in {state}")
+
+        time.sleep(15)
+
+
+def stop_app():
+    c = _client()
+    try:
+        c.stop_application(applicationId=EMR_APP_ID)
+    except c.exceptions.ConflictException:
+        # already stopping/stopped
+        pass
+    print("Stop requested.")
+
 
 with DAG(
     dag_id="emr_serverless_trigger",
@@ -32,71 +91,15 @@ with DAG(
     tags=["emr-serverless"],
 ) as dag:
 
-    start_app = kpo(
-        "start_emr_app",
-        f"""
-set -euo pipefail
-echo "Starting EMR Serverless application {EMR_APP_ID} (if needed)..."
-aws emr-serverless start-application --application-id "{EMR_APP_ID}" || true
+    t1 = PythonOperator(task_id="start_app", python_callable=start_app)
+    t2 = PythonOperator(task_id="start_job", python_callable=start_job)
+    t3 = PythonOperator(task_id="wait_job", python_callable=wait_job)
 
-echo "Waiting for STARTED..."
-for i in $(seq 1 60); do
-  s=$(aws emr-serverless get-application --application-id "{EMR_APP_ID}" --query "application.state" --output text)
-  echo "state=$s"
-  [ "$s" = "STARTED" ] && exit 0
-  sleep 10
-done
-
-echo "Timed out waiting for STARTED"
-exit 1
-""",
+    # stop even if job fails
+    t4 = PythonOperator(
+        task_id="stop_app",
+        python_callable=stop_app,
+        trigger_rule=TriggerRule.ALL_DONE,
     )
 
-    run_job = kpo(
-        "run_spark_job",
-        f"""
-set -euo pipefail
-
-echo "Submitting job..."
-JOB_RUN_ID=$(aws emr-serverless start-job-run \
-  --application-id "{EMR_APP_ID}" \
-  --execution-role-arn "{EMR_EXEC_ROLE_ARN}" \
-  --job-driver '{{"sparkSubmit": {{"entryPoint": "{ENTRYPOINT_S3}"}}}}' \
-  --query "jobRunId" --output text)
-
-echo "JOB_RUN_ID=$JOB_RUN_ID"
-
-echo "Polling until terminal state..."
-while true; do
-  STATE=$(aws emr-serverless get-job-run \
-    --application-id "{EMR_APP_ID}" \
-    --job-run-id "$JOB_RUN_ID" \
-    --query "jobRun.state" --output text)
-  echo "STATE=$STATE"
-
-  if [ "$STATE" = "SUCCESS" ]; then
-    echo "✅ SUCCESS: $JOB_RUN_ID"
-    exit 0
-  fi
-
-  if [ "$STATE" = "FAILED" ] || [ "$STATE" = "CANCELLED" ]; then
-    echo "❌ FAILED/CANCELLED: $JOB_RUN_ID"
-    aws emr-serverless get-job-run --application-id "{EMR_APP_ID}" --job-run-id "$JOB_RUN_ID" --output json || true
-    exit 1
-  fi
-
-  sleep 15
-done
-""",
-    )
-
-    stop_app = kpo(
-        "stop_emr_app",
-        f"""
-set -euo pipefail
-echo "Stopping EMR Serverless application {EMR_APP_ID}..."
-aws emr-serverless stop-application --application-id "{EMR_APP_ID}" || true
-""",
-    )
-
-    start_app >> run_job >> stop_app
+    t1 >> t2 >> t3 >> t4
