@@ -18,6 +18,7 @@ with DAG(
         name="run-script-from-s3",
         namespace="airflow",
         in_cluster=True,
+        service_account_name="airflow-worker",
         image="public.ecr.aws/docker/library/python:3.11-slim",
         cmds=["bash", "-lc"],
         arguments=[
