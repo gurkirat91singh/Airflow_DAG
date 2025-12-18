@@ -4,11 +4,8 @@ from airflow import DAG
 EMR_APP_ID = "00g1epr3lmt18s09"
 EMR_EXEC_ROLE_ARN = "arn:aws:iam::451393504235:role/emr-serverless-execution-role-poc"
 
-# Spark entrypoint script in S3 (upload this file)
+# Spark entrypoint script in S3
 ENTRYPOINT_S3 = "s3://gsingh-pyspark-poc/emr/jobs/hello_spark.py"
-
-# Where EMR Serverless should write logs
-LOG_URI = "s3://gsingh-pyspark-poc/emr-serverless-logs/"
 
 def kpo(task_id: str, script: str):
     # lazy import to avoid DAG import timeouts
@@ -65,7 +62,6 @@ JOB_RUN_ID=$(aws emr-serverless start-job-run \
   --application-id "{EMR_APP_ID}" \
   --execution-role-arn "{EMR_EXEC_ROLE_ARN}" \
   --job-driver '{{"sparkSubmit": {{"entryPoint": "{ENTRYPOINT_S3}"}}}}' \
-  --configuration-overrides '{{"monitoringConfiguration": {{"s3MonitoringConfiguration": {{"logUri": "{LOG_URI}"}}}}}}' \
   --query "jobRunId" --output text)
 
 echo "JOB_RUN_ID=$JOB_RUN_ID"
