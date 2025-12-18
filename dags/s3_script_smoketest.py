@@ -1,19 +1,14 @@
 from datetime import datetime
 from airflow import DAG
-from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 
 S3_BUCKET = "gsingh-pyspark-poc"
 S3_KEY = "airflow/hello.py"
 
-with DAG(
-    dag_id="s3_script_smoketest",
-    start_date=datetime(2024, 1, 1),
-    schedule=None,
-    catchup=False,
-    tags=["smoketest", "s3", "kubernetes"],
-) as dag:
+def build_task(dag: DAG):
+    # Lazy import to avoid DAG import timeout
+    from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 
-    run_script_from_s3 = KubernetesPodOperator(
+    return KubernetesPodOperator(
         task_id="run_script_from_s3",
         name="run-script-from-s3",
         namespace="airflow",
@@ -21,8 +16,7 @@ with DAG(
         service_account_name="airflow-worker",
         image="public.ecr.aws/docker/library/python:3.11-slim",
         cmds=["bash", "-lc"],
-        arguments=[
-            f"""
+        arguments=[f"""
             set -e
             echo "Installing awscli..."
             pip install -q awscli
@@ -32,8 +26,16 @@ with DAG(
 
             echo "Running script..."
             python /tmp/hello.py
-            """
-        ],
+        """],
         get_logs=True,
-        is_delete_operator_pod=False,
+        is_delete_operator_pod=True,
     )
+
+with DAG(
+    dag_id="s3_script_smoketest",
+    start_date=datetime(2024, 1, 1),
+    schedule=None,
+    catchup=False,
+    tags=["smoketest", "s3", "kubernetes"],
+) as dag:
+    build_task(dag)
