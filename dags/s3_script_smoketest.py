@@ -1,5 +1,5 @@
+from datetime import datetime
 from airflow import DAG
-from airflow.utils.dates import days_ago
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 
 S3_BUCKET = "gsingh-pyspark-poc"
@@ -7,8 +7,8 @@ S3_KEY = "airflow/hello.py"
 
 with DAG(
     dag_id="s3_script_smoketest",
-    start_date=days_ago(1),
-    schedule=None,          # manual trigger only
+    start_date=datetime(2024, 1, 1),
+    schedule=None,
     catchup=False,
     tags=["smoketest", "s3", "kubernetes"],
 ) as dag:
