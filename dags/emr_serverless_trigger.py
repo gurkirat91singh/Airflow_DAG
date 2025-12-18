@@ -12,6 +12,20 @@ EMR_APP_ID = "00g1epr3lmt18s09"
 EMR_EXEC_ROLE_ARN = "arn:aws:iam::451393504235:role/emr-serverless-execution-role-poc"
 ENTRYPOINT_S3 = "s3://gsingh-pyspark-poc/emr/jobs/hello_spark.py"
 
+JOB_NAME = "airflow-emr-smoketest"
+
+SPARK_SUBMIT_PARAMETERS = (
+    "--conf spark.dynamicAllocation.enabled=false "
+    "--conf spark.executor.instances=2 "
+    "--conf spark.executor.cores=2 "
+    "--conf spark.executor.memory=6g "
+    "--conf spark.executor.memoryOverhead=2g "
+    "--conf spark.driver.memory=4g "
+    "--conf spark.driver.memoryOverhead=2g "
+    "--jars s3://gsingh-pyspark-poc/jars/postgresql-42.7.3.jar"
+)
+
+
 
 def _client():
     import boto3
@@ -39,15 +53,28 @@ def start_app():
 
 def start_job(ti):
     c = _client()
+
     resp = c.start_job_run(
         applicationId=EMR_APP_ID,
         executionRoleArn=EMR_EXEC_ROLE_ARN,
-        jobDriver={"sparkSubmit": {"entryPoint": ENTRYPOINT_S3}},
+        name=f"{JOB_NAME}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
+        jobDriver={
+            "sparkSubmit": {
+                "entryPoint": ENTRYPOINT_S3,
+                "sparkSubmitParameters": SPARK_SUBMIT_PARAMETERS,
+            }
+        },
         # no monitoringConfiguration (S3 logs removed as requested)
     )
+
     job_run_id = resp["jobRunId"]
     print(f"JOB_RUN_ID={job_run_id}")
+    print(
+        "EMR console (job runs): "
+        f"https://{AWS_REGION}.console.aws.amazon.com/emr/home?region={AWS_REGION}#/serverless-applications/{EMR_APP_ID}/jobruns"
+    )
     ti.xcom_push(key="job_run_id", value=job_run_id)
+
 
 
 def wait_job(ti):
