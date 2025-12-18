@@ -1,0 +1,37 @@
+from airflow import DAG
+from airflow.utils.dates import days_ago
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+
+S3_BUCKET = "gsingh-pyspark-poc"
+S3_KEY = "airflow/hello.py"
+
+with DAG(
+    dag_id="s3_script_smoketest",
+    start_date=days_ago(1),
+    schedule=None,          # manual trigger only
+    catchup=False,
+    tags=["smoketest", "s3", "kubernetes"],
+) as dag:
+
+    run_script_from_s3 = KubernetesPodOperator(
+        task_id="run_script_from_s3",
+        name="run-script-from-s3",
+        namespace="airflow",
+        image="public.ecr.aws/docker/library/python:3.11-slim",
+        cmds=["bash", "-lc"],
+        arguments=[
+            f"""
+            set -e
+            echo "Installing awscli..."
+            pip install -q awscli
+
+            echo "Downloading script from S3..."
+            aws s3 cp s3://{S3_BUCKET}/{S3_KEY} /tmp/hello.py
+
+            echo "Running script..."
+            python /tmp/hello.py
+            """
+        ],
+        get_logs=True,
+        is_delete_operator_pod=True,
+    )
