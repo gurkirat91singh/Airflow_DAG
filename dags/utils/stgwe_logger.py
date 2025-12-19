@@ -5,7 +5,12 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 PG_CONN_ID = "stgwe_postgres"
 XCOM_KEY_LOG_ID = "stgwe_log_id"
+START_TASK_ID = "__start_log"
 
+
+# -------------------------
+# helpers
+# -------------------------
 
 def _pg():
     return PostgresHook(postgres_conn_id=PG_CONN_ID)
@@ -41,11 +46,25 @@ def _get_action_id(job_id: int, task_id: str) -> int:
         parameters=(job_id, task_id),
     )
     if not rec:
-        raise ValueError(f"stgwe.stg_action missing for job_id={job_id}, action_name='{task_id}'")
+        raise ValueError(
+            f"stgwe.stg_action missing for job_id={job_id}, action_name='{task_id}'"
+        )
     return int(rec[0])
 
 
+def _is_internal_task(task_id: str) -> bool:
+    return task_id.startswith("__")
+
+
+# -------------------------
+# job-level logging
+# -------------------------
+
 def create_job_log(**context) -> int:
+    """
+    Creates a row in stg_job_log and stores log_id in XCom.
+    MUST be run as the first task in the DAG with task_id=__start_log
+    """
     ti = context["ti"]
     dag_id = ti.dag_id
     job_id = _get_job_id(dag_id)
@@ -64,10 +83,15 @@ def create_job_log(**context) -> int:
 
 
 def close_job_log(status: str, **context):
+    """
+    Updates stg_job_log using log_id from __start_log XCom.
+    Called from __end_ok / __end_fail tasks.
+    """
     ti = context["ti"]
-    log_id = ti.xcom_pull(key=XCOM_KEY_LOG_ID)
+    log_id = ti.xcom_pull(task_ids=START_TASK_ID, key=XCOM_KEY_LOG_ID)
+
     if not log_id:
-        raise ValueError("log_id not found in XCom (start_log may not have run)")
+        raise ValueError("log_id not found in XCom from __start_log")
 
     _pg().run(
         """
@@ -80,14 +104,23 @@ def close_job_log(status: str, **context):
     )
 
 
+# -------------------------
+# step-level callbacks
+# -------------------------
+
 def task_on_execute(context):
     ti = context["ti"]
+
+    # Skip internal bookkeeping tasks
+    if _is_internal_task(ti.task_id):
+        return
+
     job_id = _get_job_id(ti.dag_id)
     action_id = _get_action_id(job_id, ti.task_id)
 
-    log_id = ti.xcom_pull(key=XCOM_KEY_LOG_ID)
+    log_id = ti.xcom_pull(task_ids=START_TASK_ID, key=XCOM_KEY_LOG_ID)
     if not log_id:
-        raise ValueError("log_id not found in XCom (ensure __start_log is upstream)")
+        raise ValueError("log_id not found in XCom from __start_log")
 
     _pg().run(
         """
@@ -103,9 +136,16 @@ def task_on_execute(context):
 
 def task_on_success(context):
     ti = context["ti"]
+
+    if _is_internal_task(ti.task_id):
+        return
+
     job_id = _get_job_id(ti.dag_id)
     action_id = _get_action_id(job_id, ti.task_id)
-    log_id = int(ti.xcom_pull(key=XCOM_KEY_LOG_ID))
+    log_id = ti.xcom_pull(task_ids=START_TASK_ID, key=XCOM_KEY_LOG_ID)
+
+    if not log_id:
+        raise ValueError("log_id not found in XCom from __start_log")
 
     _pg().run(
         """
@@ -115,15 +155,22 @@ def task_on_success(context):
          WHERE log_id   = %s
            AND action_id= %s
         """,
-        parameters=(_utcnow(), "SUCCESS", log_id, action_id),
+        parameters=(_utcnow(), "SUCCESS", int(log_id), int(action_id)),
     )
 
 
 def task_on_failure(context):
     ti = context["ti"]
+
+    if _is_internal_task(ti.task_id):
+        return
+
     job_id = _get_job_id(ti.dag_id)
     action_id = _get_action_id(job_id, ti.task_id)
-    log_id = int(ti.xcom_pull(key=XCOM_KEY_LOG_ID))
+    log_id = ti.xcom_pull(task_ids=START_TASK_ID, key=XCOM_KEY_LOG_ID)
+
+    if not log_id:
+        raise ValueError("log_id not found in XCom from __start_log")
 
     _pg().run(
         """
@@ -133,5 +180,5 @@ def task_on_failure(context):
          WHERE log_id   = %s
            AND action_id= %s
         """,
-        parameters=(_utcnow(), "FAILED", log_id, action_id),
+        parameters=(_utcnow(), "FAILED", int(log_id), int(action_id)),
     )
