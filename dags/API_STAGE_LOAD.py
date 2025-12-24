@@ -30,7 +30,8 @@ SPARK_PARAMS = (
     "--conf spark.executor.memoryOverhead=2g "
     "--conf spark.driver.memory=4g "
     "--conf spark.driver.memoryOverhead=2g "
-    "--jars s3://gsingh-pyspark-poc/jars/postgresql-42.7.3.jar"
+    "--jars s3://gsingh-pyspark-poc/jars/postgresql-42.7.3.jar "
+    "--py-files s3://gsingh-pyspark-poc/deps/pydeps.zip"
 )
 
 START_TASK_ID = "__start_log"
