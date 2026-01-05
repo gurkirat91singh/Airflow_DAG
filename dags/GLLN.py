@@ -31,6 +31,7 @@ SPARK_PARAMS = (
     "--conf spark.driver.memory=4g "
     "--conf spark.driver.memoryOverhead=2g "
     "--jars s3://gsingh-pyspark-poc/jars/postgresql-42.7.3.jar "
+    "--py-files s3://gsingh-pyspark-poc/files/app.zip " ## for the user defined functions 
     "--py-files s3://gsingh-pyspark-poc/deps/pydeps.zip" ## for the other pip installs we have 
 )
 
