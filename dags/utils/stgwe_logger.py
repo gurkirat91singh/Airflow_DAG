@@ -24,14 +24,14 @@ def _get_job_id(dag_id: str) -> int:
     rec = _pg().get_first(
         """
         SELECT job_id
-          FROM stgwe.stg_job
+          FROM etran.stg_job
          WHERE job_name = %s
            AND is_active = TRUE
         """,
         parameters=(dag_id,),
     )
     if not rec:
-        raise ValueError(f"stgwe.stg_job missing active job_name='{dag_id}'")
+        raise ValueError(f"etran.stg_job missing active job_name='{dag_id}'")
     return int(rec[0])
 
 
@@ -39,14 +39,14 @@ def _get_action_id(job_id: int, task_id: str) -> int:
     rec = _pg().get_first(
         """
         SELECT id
-          FROM stgwe.stg_action
+          FROM etran.stg_action
          WHERE job_id = %s
            AND action_name = %s
         """,
         parameters=(job_id, task_id),
     )
     if not rec:
-        raise ValueError(f"stgwe.stg_action missing for job_id={job_id}, action_name='{task_id}'")
+        raise ValueError(f"etran.stg_action missing for job_id={job_id}, action_name='{task_id}'")
     return int(rec[0])
 
 
@@ -67,7 +67,7 @@ def create_job_log(**context) -> int:
 
     log_id = _pg().get_first(
         """
-        INSERT INTO stgwe.stg_job_log (job_id, start_time, status)
+        INSERT INTO etran.stg_job_log (job_id, start_time, status)
         VALUES (%s, %s, %s)
         RETURNING log_id
         """,
@@ -84,7 +84,7 @@ def close_job_log(status: str, **context):
 
     _pg().run(
         """
-        UPDATE stgwe.stg_job_log
+        UPDATE etran.stg_job_log
            SET end_time = %s,
                status   = %s
          WHERE log_id   = %s
@@ -109,11 +109,11 @@ def task_on_execute(context):
     # insert only if missing
     _pg().run(
         """
-        INSERT INTO stgwe.stg_job_step_log (log_id, action_id, start_time, status)
+        INSERT INTO etran.stg_job_step_log (log_id, action_id, start_time, status)
         SELECT %s, %s, %s, %s
         WHERE NOT EXISTS (
           SELECT 1
-            FROM stgwe.stg_job_step_log
+            FROM etran.stg_job_step_log
            WHERE log_id = %s
              AND action_id = %s
         )
@@ -124,7 +124,7 @@ def task_on_execute(context):
     # ensure status is RUNNING at start (even if row existed)
     _pg().run(
         """
-        UPDATE stgwe.stg_job_step_log
+        UPDATE etran.stg_job_step_log
            SET start_time = COALESCE(start_time, %s),
                status     = %s
          WHERE log_id     = %s
@@ -145,7 +145,7 @@ def task_on_success(context):
 
     _pg().run(
         """
-        UPDATE stgwe.stg_job_step_log
+        UPDATE etran.stg_job_step_log
            SET end_time = %s,
                status   = %s
          WHERE log_id   = %s
@@ -166,7 +166,7 @@ def task_on_failure(context):
 
     _pg().run(
         """
-        UPDATE stgwe.stg_job_step_log
+        UPDATE etran.stg_job_step_log
            SET end_time = %s,
                status   = %s
          WHERE log_id   = %s
