@@ -16,11 +16,11 @@ from utils.stgwe_logger import (
     task_on_failure,
 )
 
-# ---- EMR config (keep same as your Lambda) ----
-REGION = "us-east-1"
-EMR_APP_ID = "00g1epr3lmt18s09"
-EXECUTION_ROLE_ARN = "arn:aws:iam::451393504235:role/emr-serverless-execution-role-poc"
-S3_BUCKET = "gsingh-pyspark-poc"
+
+REGION = "us-east-2"
+EMR_APP_ID = "00g2peqpfb58ar0d"
+EXECUTION_ROLE_ARN = "arn:aws:iam::356070494385:role/emr-serverless-execution-role"
+S3_BUCKET = "stgwe-spark"
 
 SPARK_PARAMS = (
     "--conf spark.dynamicAllocation.enabled=false "
